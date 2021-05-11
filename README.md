@@ -24,7 +24,7 @@ https://github.com/shjeon90/GradientCalculator
 fpath 디렉토리 내에 엑셀(.xlsx) 파일이 포함된 경우, 첫 번째 시트만 분석함.
 ```
 명령 프롬프트 실행 후, 아래 명령어 입력.
->> python gradient.py --fpath [데이터 파일이 보관된 디렉토리 경로] --opath [분석 결과 저장 경로] [-MS]
+>> python gradient.py --fpath [데이터 파일이 보관된 디렉토리 경로] --opath [분석 결과 저장 경로] [-MS] [-V]
 
 예시 (ms 포함인 경우):
 >> python gradient.py --fpath C:\ --opath C:\ -MS
