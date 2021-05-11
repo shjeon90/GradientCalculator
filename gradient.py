@@ -29,7 +29,10 @@ def sanitize_file_path(fpath, opath):
 
 def load_data(path, is_ms):
     print('[*] loading data...')
-    data = pd.read_excel(path, header=None)
+    if '.csv' in pathlib.Path(path).suffix.lower():
+        data = pd.read_csv(path, header=None)
+    else:
+        data = pd.read_excel(path, header=None)
 
     if is_ms: cols = COLS_WITH_MS
     else: cols = COLS_WITHOUT_MS
