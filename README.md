@@ -8,7 +8,7 @@ Installation
 * 라이브러리 설치
 ```
 명령 프롬프트 실행 후, 아래 명령어 입력.
->> python -m pip install numpy matplotlib pandas argparse pathlib openpyxl 
+>> python -m pip install numpy matplotlib pandas argparse pathlib openpyxl xlrd
 ```
 * 스크립트 다운로드
 ```
