@@ -13,19 +13,24 @@ def print_df(data):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None):
         print(data)
 
-def sanitize_file_path(fpath, opath):
+def sanitize_source_path(fpath, opath):
+    if fpath.endswith('/') or fpath.endswith('\\'):
+        fpath = fpath[:-1]
+    if opath.endswith('/') or opath.endswith('\\'):
+        opath = opath[:-1]
+
     if not os.path.exists(fpath):
         print('[!] Invalid path. please check and write the exact path to data file.')
         exit(1)
 
-    fpath = pathlib.Path(fpath)
-
-    if fpath.suffix.lower() not in ['.csv', '.xlsx']:
-        print('[!] This script only supports .csv or .xlsx.')
+    if not os.path.isdir(fpath):
+        print('[!] Invalid path. please input the directory path, not file.')
         exit(1)
 
     if not os.path.exists(opath):
         os.mkdir(opath)
+
+    return fpath, opath
 
 def load_data(path, is_ms):
     print('[*] loading data...')
@@ -44,8 +49,13 @@ def load_data(path, is_ms):
     data = data.groupby('value', as_index=False).first()
     data = data[cols]
 
+    if data['value'].dtype == 'object':
+        data = data[data['value'].str.isnumeric().isnull()]
+        data['value'] = data['value'].astype(data['year'].dtype)
+
     print('[-] print first few lines of deduplicated data')
     print(data.head())
+    data.info()
 
     return data
 
@@ -70,37 +80,38 @@ def calc_gradients(hours, values):
 
     return gradients
 
-def do_plot(hours, values):
+def do_plot(hours, values, fname):
 
     fig = plt.figure()
     plt.scatter(hours, values, edgecolors='b', facecolors='none')
     plt.xlabel('Hour')
     plt.ylabel('Hn')
+    plt.title(fname)
     fig.show()
 
-def process_data(data, opath, is_ms):
+def process_data(data, path, opath, is_ms):
     print('[*] processing data...')
     time_info = data.iloc[:, :-1]
+    time_info = time_info.astype('int64')
     values = data.iloc[:, -1].to_numpy()
     dates = pd.to_datetime(time_info[['year', 'month', 'day']].apply(lambda row: '-'.join(row.values.astype(str)), axis=1))
     hours = calc_hours(dates, time_info, is_ms)
     gradients = calc_gradients(hours, values)
 
-    do_plot(hours, values)
+    fname = pathlib.Path(path).name
+    do_plot(hours, values, fname)
 
     dates, hours, values = dates.to_numpy()[:-1], hours[:-1], values[:-1]
     outputs = pd.DataFrame(data={'date': dates, 'hour': hours, 'Hn': values, 'gradient': gradients})
-    outputs.to_excel(os.path.join(opath, 'output.xlsx'), index=False)
-
-    plt.show()
+    outputs.to_excel(os.path.join(opath, '%s-output.xlsx' % fname), index=False)
 
 def main(path, opath, is_ms):
     data = load_data(path, is_ms)
-    process_data(data, opath, is_ms)
+    process_data(data, path, opath, is_ms)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This script calculates the gradients with data deduplication.')
-    parser.add_argument('--fpath', type=str, required=True, help='path to data file. if path includes white spaces or Korean, wrap the entire path with double quotes.')
+    parser.add_argument('--fpath', type=str, required=True, help='directory including data files. if path includes white spaces or Korean, wrap the entire path with double quotes.')
     parser.add_argument('--opath', type=str, required=False, help='path to save the output. if you don\'t specify it, the current directory is inplaced.', default=os.getcwd())
     parser.add_argument('-MS', help='include this command in your arguments', action='store_true')
 
@@ -110,7 +121,15 @@ if __name__ == '__main__':
     print('[*] path to file:', fpath)
     print('[*] path to save:', opath)
     print('[*] with ms:', is_ms)
+    print('[*] the title of plot may not be properly expressed if you use the file name in Korean.')
 
-    sanitize_file_path(fpath, opath)
+    fpath, opath = sanitize_source_path(fpath, opath)
 
-    main(fpath, opath, is_ms)
+    source_files = [os.path.join(fpath, path) for path in os.listdir(fpath) if not os.path.isdir(os.path.join(fpath, path))]
+    source_files.sort()
+
+    for spath in source_files:
+        print('[*] start to analyze', spath)
+        main(spath, opath, is_ms)
+
+    plt.show()

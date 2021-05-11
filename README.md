@@ -22,20 +22,20 @@ https://github.com/shjeon90/GradientCalculator
 * 스크립트 실행
 ```
 명령 프롬프트 실행 후, 아래 명령어 입력.
->> python gradient.py --fpath [데이터 파일 경로] --opath [분석 결과 저장 경로] [-MS]
+>> python gradient.py --fpath [데이터 파일이 보관된 디렉토리 경로] --opath [분석 결과 저장 경로] [-MS]
 
 예시 (ms 포함인 경우):
->> python gradient.py --fpath C:\data_with_ms.xlsx --opath C:\ -MS
+>> python gradient.py --fpath C:\ --opath C:\ -MS
 
 예시 (ms 포함하지 않는 경우):
->> python gradient.py --fpath C:\data_without_ms.xlsx --opath C:\ 
+>> python gradient.py --fpath C:\ --opath C:\ 
 
 예시 (한글이나 공백문자를 포함하는 경로):
->> python gradient.py --fpath "C:\한글\공백 문자\data.xlsx" --opath "C:\공백 문자"
+>> python gradient.py --fpath "C:\한글\공백 문자\" --opath "C:\공백 문자"
 ```
 
 Output files
 ==
-opath에 명시한 경로에 output.xlsx 파일이 생성됨.
+opath에 명시한 경로에 [파일명]-output.xlsx 파일이 생성됨.
 
 ![fig1](./figure/fig1.PNG)
