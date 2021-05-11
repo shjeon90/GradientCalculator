@@ -50,8 +50,8 @@ def load_data(path, is_ms):
     data = data[cols]
 
     if data['value'].dtype == 'object':
-        data = data[data['value'].str.isnumeric().isnull()]
-        data['value'] = data['value'].astype(data['year'].dtype)
+        data = data[data['value'].apply(lambda val: val.lower() != 'error')]
+        data['value'] = pd.to_numeric(data['value'])
 
     print('[-] print first few lines of deduplicated data')
     print(data.head())
