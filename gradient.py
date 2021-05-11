@@ -151,7 +151,7 @@ if __name__ == '__main__':
             print('[*] plot', dpath)
             try:
                 fname = pathlib.Path(dpath).name
-                data = pd.read_excel(dpath, header=0)
+                data = pd.read_excel(dpath, header=0, engine='openpyxl')
                 hours = data['hour'].to_numpy()
                 values = data['Hn'].to_numpy()
                 gradients = data['gradient'].to_numpy()
