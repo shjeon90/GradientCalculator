@@ -30,6 +30,9 @@ def sanitize_source_path(fpath, opath):
     if not os.path.exists(opath):
         os.mkdir(opath)
 
+    if not os.path.exists(os.path.join(opath, 'figures')):
+        os.mkdir(os.path.join(opath, 'figures'))
+
     return fpath, opath
 
 def load_data(path, is_ms):
@@ -80,29 +83,32 @@ def calc_gradients(hours, values):
 
     return gradients
 
-def do_plot(hours, values, fname):
-
+def do_plot(hours, values, opath, fname):
+    print('[*] save plot')
     fig = plt.figure()
     plt.scatter(hours, values, edgecolors='b', facecolors='none')
     plt.xlabel('Hour')
-    plt.ylabel('Hn')
+    plt.ylabel('Cn')
     plt.title(fname)
-    fig.show()
+    plt.savefig(os.path.join(opath, 'figures', fname + '.png'))
+    plt.close(fig)
+
 
 def process_data(data, path, opath, is_ms):
     print('[*] processing data...')
     time_info = data.iloc[:, :-1]
     time_info = time_info.astype('int64')
     values = data.iloc[:, -1].to_numpy()
+    values = (6. * values * 4.) / 64.**2
     dates = pd.to_datetime(time_info[['year', 'month', 'day']].apply(lambda row: '-'.join(row.values.astype(str)), axis=1))
     hours = calc_hours(dates, time_info, is_ms)
     gradients = calc_gradients(hours, values)
 
-    fname = pathlib.Path(path).name
-    do_plot(hours, values, fname)
+    fname = pathlib.Path(path).name.split('.')[0]
+    do_plot(hours, values, opath, fname)
 
     dates, hours, values = dates.to_numpy()[:-1], hours[:-1], values[:-1]
-    outputs = pd.DataFrame(data={'date': dates, 'hour': hours, 'Hn': values, 'gradient': gradients})
+    outputs = pd.DataFrame(data={'date': dates, 'hour': hours, 'Cn': values, 'gradient': gradients})
     outputs.to_excel(os.path.join(opath, '%s-output.xlsx' % fname), index=False)
 
 def main(path, opath, is_ms):
@@ -145,6 +151,9 @@ if __name__ == '__main__':
             print('opath must contain at least one data file(.xlsx).')
             exit(1)
 
+        if not os.path.exists(os.path.join(opath, 'figures')):
+            os.mkdir(os.path.join(opath, 'figures'))
+
         data_files.sort()
 
         for dpath in data_files:
@@ -155,9 +164,7 @@ if __name__ == '__main__':
                 hours = data['hour'].to_numpy()
                 values = data['Hn'].to_numpy()
                 gradients = data['gradient'].to_numpy()
-                do_plot(hours, values, fname)
+                do_plot(hours, values, opath, fname)
 
             except PermissionError:
                 pass
-
-    plt.show()
