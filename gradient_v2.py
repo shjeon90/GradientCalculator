@@ -6,10 +6,11 @@ import pathlib
 import os
 import warnings
 from scipy.optimize import curve_fit
-from sklearn.linear_model import LinearRegression, Lasso
+from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.svm import SVR
 
 warnings.filterwarnings('ignore')
 
@@ -17,7 +18,7 @@ COLS_WITH_MS = ['year', 'month', 'day', 'hour', 'minute', 'second', 'ms', 'value
 COLS_WITHOUT_MS = ['year', 'month', 'day', 'hour', 'minute', 'second', 'value']
 
 RATIO_CLIFF_THRESHOLD = 0.015
-CURVATURE_THRESHOLD = 1e-6
+CURVATURE_THRESHOLD = 1e-8
 
 def print_df(data):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None):
@@ -215,9 +216,10 @@ def interpolate(mat):
                 break
         return ub
 
-    first = mat.iloc[0, :]
-    if first.isin([0.]).any().any():
-        raise Exception('the first value(creep strain) cannot be zero!')
+    # print(mat)
+    # first = mat.iloc[0, :]
+    # if first.isin([0.]).any().any():
+    #     raise Exception('the first value(creep strain) cannot be zero!')
 
     for i in range(n):
         part = mat.loc[:, i]
@@ -245,10 +247,10 @@ def interpolate(mat):
                     mat.iloc[j, i] = c_c
 
             else: l_bound = j
-
+    # print(mat)
     return mat
 
-def calculate_average(l_data):
+def calculate_average(l_data, is_3):
     hours = None
     for data in l_data:
         if hours is None: hours = data['hour']
@@ -511,82 +513,118 @@ def fit_knee_points(hours, creeps, opath):
 def calc_avg_gradient(x1, y1, x2, y2, idx_s3, m_primary, m_secondary, param_tertiary):
     pass
 
-def find_linear_intv(x, y):
-    f = x[-1] / 3.
-    s = f * 2.
+def find_linear_intv(x, y, is_3):
+    if is_3:
+        f = x[-1] / 3.
+        s = f * 2.
 
-    idx_sec = x[x < s].shape[0]
+        idx_sec = x[x < s].shape[0]
 
-    # stage 1: find left end
-    scores = []
-    for i in range(int(len(x) // 2)):
-        x_ = x[i:idx_sec].reshape((-1, 1))
-        lr = LinearRegression()
-        lr.fit(x_, y[i:idx_sec])
+        # stage 1: find left end
+        scores = []
+        for i in range(int(len(x) // 2)):
+            x_ = x[i:idx_sec].reshape((-1, 1))
+            lr = LinearRegression()
+            lr.fit(x_, y[i:idx_sec])
 
-        score = lr.score(x_, y[i:idx_sec])
-        scores.append(score)
+            score = lr.score(x_, y[i:idx_sec])
+            scores.append(score)
 
-    # fig = plt.figure()
-    # plt.plot(scores)
-    # fig.show()
+        # fig = plt.figure()
+        # plt.plot(scores)
+        # fig.show()
 
-    idx_fst = np.argmax(scores)
-    scores = []
-    # stage 2: find right end
-    for i in range(len(x), int(len(x) // 2), -1):
-        x_ = x[idx_fst:i].reshape((-1, 1))
-        lr = LinearRegression()
-        lr.fit(x_, y[idx_fst:i])
+        idx_fst = np.argmax(scores)
+        scores = []
+        # stage 2: find right end
+        for i in range(len(x), int(len(x) // 2), -1):
+            x_ = x[idx_fst:i].reshape((-1, 1))
+            lr = LinearRegression()
+            lr.fit(x_, y[idx_fst:i])
 
-        score = lr.score(x_, y[idx_fst:i])
-        scores.append(score)
+            score = lr.score(x_, y[idx_fst:i])
+            scores.append(score)
 
-    # fig = plt.figure()
-    # plt.plot(scores)
-    # fig.show()
+        # fig = plt.figure()
+        # plt.plot(scores)
+        # fig.show()
 
-    idx_sec = len(x) - np.argmax(scores)
-    return idx_fst, idx_sec
+        idx_sec = len(x) - np.argmax(scores)
+        return idx_fst, idx_sec
+    else:
+        f = x[-1] * 9 / 10.
+        limit = x[x < f].shape[0]
+        scores = []
 
-def fit_poly_curve(hours, values, ax, idx_row):
+        for i in range(limit):
+            x_ = x[i:].reshape((-1, 1))
+            lr = LinearRegression()
+            lr.fit(x_, y[i:])
+
+            score = lr.score(x_, y[i:])
+            scores.append(score)
+
+        idx_fst = np.argmax(scores)
+        return idx_fst, -1
+
+def fit_poly_curve(hours, values, ax, idx_row, is_3):
     mean_values = np.mean(values)
-    values -= mean_values
+    if is_3:
+        values -= mean_values
+
     # degrees = [9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41]
-    degrees = [51, 61, 71, 81]
+    # degrees = [51, 61, 71, 81]
+    if is_3:
+        degrees = [50, 60, 70, 80]
+    else:
+        degrees = [6, 7, 8]
     alphas = [1e-5]
-    hours_r = scale_x(hours, -1., 1.).reshape((-1, 1))
+
+    if is_3:
+        hours_r = scale_x(hours, -1., 1.).reshape((-1, 1))
+    else:
+        hours_r = scale_x(hours, 0., 1.)
+        hours_r = np.log(hours_r + 1e-10).reshape((-1, 1))
 
     x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
 
     # fig, ax = plt.subplots(1, 3)
-    ax[idx_row, 0].plot(hours, values + mean_values, c='k', label='observations')
+    ax[idx_row, 0].plot(hours, (values + mean_values) if is_3 else values, c='k', label='observations')
+
 
     max_scores = []
     for d in degrees:
         pf = PolynomialFeatures(degree=d, include_bias=True)
         hours_ = pf.fit_transform(hours_r)
 
-        lassos = []
+        models = []
         scores = []
         for a in alphas:
-            ls = Lasso(alpha=a)
-            ls.fit(hours_, values)
-            score = ls.score(hours_, values)
-            lassos.append(ls)
+            if is_3:
+                md = Lasso(alpha=a)
+            else:
+                md = Ridge(alpha=a)
+            md.fit(hours_, values)
+            score = md.score(hours_, values)
+            models.append(md)
             scores.append(score)
 
         max_idx = int(np.argmax(scores))
         max_scores.append([max_idx, scores[max_idx]])
 
-        x_ = scale_x(x, -1., 1., hours.min(), hours.max())
-        x_ = x_.reshape((-1, 1))
-        x_sec_intv = x_
+        if is_3:
+            x_ = scale_x(x, -1., 1., hours.min(), hours.max()).reshape((-1, 1))
+            x_sec_intv = x_
+        else:
+            x_ = scale_x(x, 0., 1., hours.min(), hours.max())
+            x_sec_intv = scale_x(x, 0., 1., hours.min(), hours.max()).reshape((-1, 1))
+            x_ = np.log(x_ + 1e-10).reshape((-1, 1))
+
         x_ = pf.fit_transform(x_)
         dh = x[1:] - x[:-1]
 
-        for i in range(len(lassos)):
-            pred_ls = lassos[i].predict(x_)
+        for i in range(len(models)):
+            pred_ls = models[i].predict(x_)
             dp_ls = pred_ls[1:] - pred_ls[:-1]
             grad_ls = dp_ls / dh
 
@@ -594,11 +632,14 @@ def fit_poly_curve(hours, values, ax, idx_row):
             cur_ls = dp_2 / dh[:-1]
 
             cur_thr = np.where(np.abs(cur_ls) < CURVATURE_THRESHOLD)
-            min_idx, max_idx = np.min(cur_thr), np.max(cur_thr)
+            if is_3:
+                min_idx, max_idx = np.min(cur_thr), np.max(cur_thr)
+            else:
+                min_idx, max_idx = np.min(cur_thr), -1
 
-            idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls)
+            idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls, is_3)
 
-            ax[idx_row, 0].plot(x, pred_ls + mean_values,label=f'lass(d=${d}$, a=${alphas[i]}$)')
+            ax[idx_row, 0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'lass(d=${d}$, a=${alphas[i]}$)')
             ax[idx_row, 1].plot(x[:-1], grad_ls, label=f'grad lass(d=${d}$, a=${alphas[i]}$)')
             ax[idx_row, 2].plot(x[:-2], cur_ls, label=f'curv lasso(d=${d}$, a=${alphas[i]}$)')
 
@@ -607,17 +648,23 @@ def fit_poly_curve(hours, values, ax, idx_row):
             # print(f'y: [{pred_ls[min_idx] + mean_values}, {pred_ls[max_idx] + mean_values}]')
             print(f'x(opt): [{x[idx_fst]}, {x[idx_sec]}]')
 
-            ax[idx_row, 0].plot([x[min_idx], x[max_idx]], [pred_ls[min_idx] + mean_values, pred_ls[max_idx] + mean_values],
-                       marker='o', markerfacecolor='none')#, label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            ax[idx_row, 0].plot([x[min_idx], x[max_idx]],
+                                [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
+                                marker='o',
+                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
             ax[idx_row, 1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
-                       marker='o', markerfacecolor='none')#, label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+                                marker='o',
+                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
             ax[idx_row, 2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
-                       marker='o', markerfacecolor='none')#, label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+                                marker='o',
+                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
 
-            ax[idx_row, 0].plot([x[idx_fst], x[idx_sec]], [pred_ls[idx_fst] + mean_values, pred_ls[idx_sec] + mean_values],
+            ax[idx_row, 0].plot([x[idx_fst], x[idx_sec]],
+                                [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
                                 marker='x')
             ax[idx_row, 1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x')
             ax[idx_row, 2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x')
+
 
     # ax[idx_row, 0].legend()
     ax[idx_row, 1].legend()
@@ -636,6 +683,46 @@ def fit_poly_curve(hours, values, ax, idx_row):
     # fig = plt.figure()
     # plt.plot(hours, values, c='b')
     # fig.show()
+
+def log_func2(x, a, b, c):
+    return a * np.log(x + b) + c
+
+# def asymptotic_func(x, a, b, n):
+#     return a * x ** n / (x ** n + b)
+
+def asymptotic_func(x, a, b, c):
+    return a - (a - b) * np.exp(-c * x)
+
+def bpm_func(x, a, b, c, d):
+    return a + b * x - c * np.exp(-d * x)
+
+def fit_poly_curve2(hours, values, ax, idx_row):
+
+    hours_ = scale_x(hours, 0., 1.)
+    hours_r = np.log(hours_ + 1e-10).reshape((-1, 1))
+
+    pf = PolynomialFeatures(10)
+    # hours_r = scale_x(hours, 0., 1.).reshape((-1, 1))
+    x = pf.fit_transform(hours_r)
+    lasso = Ridge(alpha=1e-5)
+    lasso.fit(x, values)
+    pred_ls_pf = lasso.predict(x)
+    print(f'lass_pf score: {r2_score(values, pred_ls_pf)}')
+
+    x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
+    x_ = scale_x(x, 0., 1., hours.min(), hours.max())
+    x_ = np.log(x_ + 1e-10).reshape((-1, 1))
+    x_ = pf.fit_transform(x_)
+    pred_ls_pf = lasso.predict(x_)
+
+    fig = plt.figure()
+    plt.plot(hours, values, c='k')
+    plt.plot(x, pred_ls_pf, c='g')  #
+    plt.ylim([0., values.max()])
+    fig.show()
+    plt.show()
+
+    exit(1)
 
 def gaussign_process(hours, values):
     gpr = GaussianProcessRegressor()
@@ -666,10 +753,11 @@ if __name__ == '__main__':
     parser.add_argument('-MS', help='include this command in your arguments', action='store_true')
     parser.add_argument('-V', help='visual mode for the results in opath. Data analyzing does not performed.', action='store_true')
     parser.add_argument('-A', help='calculate the average for all files in the given directory', action='store_true')
+    parser.add_argument('-NI', help='indicating the number of sections is 3', action='store_true')
 
     args = parser.parse_args()
 
-    fpath, opath, is_ms, is_visual, do_average = args.fpath, args.opath, args.MS, args.V, args.A
+    fpath, opath, is_ms, is_visual, do_average, is_3 = args.fpath, args.opath, args.MS, args.V, args.A, args.NI
     if not is_visual:
         if fpath is None or fpath == '':
             print('[!] you must specify the fpath in analyzing mode.')
@@ -698,16 +786,27 @@ if __name__ == '__main__':
         if do_average:
             print('[*] calculate the average for all files. It takes a while...')
             fig, ax = plt.subplots(3, 3, sharex=True)
-            hours, avg_creeps, gradients = calculate_average(outputs)
-            fit_poly_curve(hours, avg_creeps, ax, 0)
+            hours, avg_creeps, gradients = calculate_average(outputs, is_3)
+            # if is_3:
+            fit_poly_curve(hours, avg_creeps, ax, 0, is_3)
+            # fig.show()
+            # else:
+            # fit_poly_curve2(hours, avg_creeps, ax, 0)
 
             output = [outputs.pop(0)]
 
-            hours, avg_creeps, gradients = calculate_average(output)
-            fit_poly_curve(hours, avg_creeps, ax, 1)
+            hours, avg_creeps, gradients = calculate_average(output, is_3)
+            # if is_3:
+            fit_poly_curve(hours, avg_creeps, ax, 1, is_3)
+            # else:
+            # fit_poly_curve2(hours, avg_creeps, ax, 0)
 
-            hours, avg_creeps, gradients = calculate_average(outputs)
-            fit_poly_curve(hours, avg_creeps, ax, 2)
+            output = [outputs.pop(1)]
+            hours, avg_creeps, gradients = calculate_average(output, is_3)
+            # if is_3:
+            fit_poly_curve(hours, avg_creeps, ax, 2, is_3)
+            # else:
+            # fit_poly_curve2(hours, avg_creeps, ax, 0)
             fig.show()
 
             # x1, y1, x2, y2, idx_s3, m_primary, m_secondary, param_tertiary = fit_knee_points(hours, avg_creeps, opath)
