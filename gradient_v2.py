@@ -287,11 +287,11 @@ def calculate_average(opath, l_data, is_3):
     plt.savefig(os.path.join(opath, 'figures', 'average.png'))
     plt.close(fig)
 
-    outputs = pd.DataFrame(data={
-        'hour': hours[:-1],
-        'avg_Cn': avg_creeps[:-1],
-        'gradient': gradients})
-    outputs.to_excel(os.path.join(opath, 'average-output.xlsx'), index=False)
+    # outputs = pd.DataFrame(data={
+    #     'hour': hours[:-1],
+    #     'avg_Cn': avg_creeps[:-1],
+    #     'gradient': gradients})
+    # outputs.to_excel(os.path.join(opath, 'average-output.xlsx'), index=False)
 
     return hours, avg_creeps, gradients
 
@@ -647,6 +647,14 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
 
             dp_2 = grad_ls[1:] - grad_ls[:-1]
             cur_ls = dp_2 / dh[:-1]
+
+            outputs = pd.DataFrame(data={
+                'hours': x[:-2],
+                'smoothed_Cn': pred_ls[:-2],
+                'gradient': grad_ls[:-1],
+                'curvature': cur_ls
+            })
+            outputs.to_excel(os.path.join(opath, f'smoothed-d{d}a{alphas[i]}-output.xlsx'), index=False)
 
             cur_thr = np.where(np.abs(cur_ls) < CURVATURE_THRESHOLD)
             if is_3:
