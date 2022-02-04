@@ -5,6 +5,7 @@ import argparse
 import pathlib
 import os
 import warnings
+from pandas.api.types import is_string_dtype
 from scipy.optimize import curve_fit
 from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.metrics import r2_score
@@ -17,8 +18,8 @@ warnings.filterwarnings('ignore')
 COLS_WITH_MS = ['year', 'month', 'day', 'hour', 'minute', 'second', 'ms', 'value']
 COLS_WITHOUT_MS = ['year', 'month', 'day', 'hour', 'minute', 'second', 'value']
 
-RATIO_CLIFF_THRESHOLD = 0.015
-CURVATURE_THRESHOLD = 1e-8
+# RATIO_CLIFF_THRESHOLD = 1.0#0.015
+# CURVATURE_THRESHOLD = 1e-8
 
 def print_df(data):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None):
@@ -72,12 +73,17 @@ def load_data(path, is_ms):
         data = pd.read_csv(path, header=None)
     else:
         data = pd.read_excel(path, header=None)
+    data.info()
+
+    if any([is_string_dtype(data.iloc[:, i]) for i in range(data.shape[1])]):
+        raise Exception('It seema data has string values. You should eliminate the non-numeric values.')
 
     if is_ms: cols = COLS_WITH_MS
     else: cols = COLS_WITHOUT_MS
 
     if data.shape[1] != len(cols):
-        data = data.iloc[:, :len(cols)]
+        # data = data.iloc[:, :len(cols)]
+        raise Exception('It seems data doesn\'t have microsec columns. You should except \'-MS\' option in the command.')
 
     # deduplicate and order by datetime.
     # data.columns = cols
@@ -132,7 +138,7 @@ def do_plot(hours, values, opath, fname):
     # fig.show()
     plt.close(fig)
 
-def sanitize_cliff_data(hours, values):
+def sanitize_cliff_data(hours, values, RATIO_CLIFF_THRESHOLD):
 
     def get_correction(idx):
         time_gap = hours[idx+1] - hours[idx]
@@ -164,7 +170,7 @@ def sanitize_cliff_data(hours, values):
         return values
     else: return values
 
-def process_data(data, path, opath, is_ms):
+def process_data(data, path, opath, is_ms, RATIO_CLIFF_THRESHOLD):
     print('[*] processing data...')
     time_info = data.iloc[:, :-1]
     time_info = time_info.astype('int64')
@@ -179,7 +185,7 @@ def process_data(data, path, opath, is_ms):
     # fig.show()
     # plt.show()
 
-    values = sanitize_cliff_data(hours, values) # under test
+    values = sanitize_cliff_data(hours, values, RATIO_CLIFF_THRESHOLD) # under test
 
     creep_strain = (6. * values * 4.) / 64.**2
 
@@ -250,7 +256,7 @@ def interpolate(mat):
     # print(mat)
     return mat
 
-def calculate_average(l_data, is_3):
+def calculate_average(opath, l_data, is_3):
     hours = None
     for data in l_data:
         if hours is None: hours = data['hour']
@@ -275,14 +281,17 @@ def calculate_average(l_data, is_3):
     avg_creeps = np.mean(mat.to_numpy(), 1)
     gradients = calc_gradients(hours, avg_creeps)
 
-    # fig = plt.figure()
-    # plt.plot(hours, avg_creeps)
-    # fig.show()
-    #
-    # fig = plt.figure()
-    # plt.plot(hours[:-1], gradients)
-    # fig.show()
-    # plt.show()
+    fig = plt.figure()
+    plt.scatter(hours, avg_creeps, edgecolors='b', facecolors='none')
+    plt.title('average')
+    plt.savefig(os.path.join(opath, 'figures', 'average.png'))
+    plt.close(fig)
+
+    outputs = pd.DataFrame(data={
+        'hour': hours[:-1],
+        'avg_Cn': avg_creeps[:-1],
+        'gradient': gradients})
+    outputs.to_excel(os.path.join(opath, 'average-output.xlsx'), index=False)
 
     return hours, avg_creeps, gradients
 
@@ -505,6 +514,7 @@ def fit_knee_points(hours, creeps, opath):
     plt.plot(xt, pt, c='#00ff00')
     plt.ylim([np.min(creeps) - r, np.max(creeps) + r])
     plt.savefig(os.path.join(opath, 'figures', 'average.png'))
+    plt.close(fig)
     # fig.show()
     # plt.show()
 
@@ -567,18 +577,20 @@ def find_linear_intv(x, y, is_3):
         idx_fst = np.argmax(scores)
         return idx_fst, -1
 
-def fit_poly_curve(hours, values, ax, idx_row, is_3):
+def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA):
     mean_values = np.mean(values)
     if is_3:
         values -= mean_values
 
     # degrees = [9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41]
     # degrees = [51, 61, 71, 81]
-    if is_3:
-        degrees = [50, 60, 70, 80]
-    else:
-        degrees = [6, 7, 8]
-    alphas = [1e-5]
+    # if is_3:
+    #     degrees = [50, 60, 70, 80]
+    # else:
+    #     degrees = [6, 7, 8]
+    degrees = [s_degree + i * i_degree for i in range(n_degree)]
+    # alphas = [1e-5]
+    alphas = [ALPHA]
 
     if is_3:
         hours_r = scale_x(hours, -1., 1.).reshape((-1, 1))
@@ -589,8 +601,13 @@ def fit_poly_curve(hours, values, ax, idx_row, is_3):
     x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
 
     # fig, ax = plt.subplots(1, 3)
-    ax[idx_row, 0].plot(hours, (values + mean_values) if is_3 else values, c='k', label='observations')
+    # ax[0].plot(hours, (values + mean_values) if is_3 else values, c='k', label='observations')
 
+
+    fig_all, ax_all = plt.subplots(1, 3)
+    plt.get_current_fig_manager().window.state('zoomed')
+    ax_all[0].scatter(hours, (values + mean_values) if is_3 else values, edgecolors='k', facecolors='none',
+                      label='observations')
 
     max_scores = []
     for d in degrees:
@@ -639,38 +656,112 @@ def fit_poly_curve(hours, values, ax, idx_row, is_3):
 
             idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls, is_3)
 
-            ax[idx_row, 0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'lass(d=${d}$, a=${alphas[i]}$)')
-            ax[idx_row, 1].plot(x[:-1], grad_ls, label=f'grad lass(d=${d}$, a=${alphas[i]}$)')
-            ax[idx_row, 2].plot(x[:-2], cur_ls, label=f'curv lasso(d=${d}$, a=${alphas[i]}$)')
+            # if not is_3:
+            #     f = x[-1] * 9 / 10
+            #     limit = x[x < f].shape[0]
+            #     ax[0].scatter([x[limit]], [pred_ls[limit]], c='b')
+
+            name_model = 'lasso' if is_3 else 'ridge'
+
+            fig, ax = plt.subplots(1, 3)
+            plt.get_current_fig_manager().window.state('zoomed')
+            ax[0].scatter(hours, (values + mean_values) if is_3 else values, edgecolors='k', facecolors='none', label='observations')
+
+            ax[0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'{name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
+            ax_all[0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'{name_model}(d=${d}$, a=${alphas[i]}$)')
+
+            ax[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
+            ax_all[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)')
+
+            ax[2].plot(x[:-2], cur_ls, label=f'curv {name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
+            ax_all[2].plot(x[:-2], cur_ls, label=f'curv {name_model}(d=${d}$, a=${alphas[i]}$)')
 
             print(f'd={d}, alpha={alphas[i]}')
             print(f'x(curv): [{x[min_idx]}, {x[max_idx]}]')
             # print(f'y: [{pred_ls[min_idx] + mean_values}, {pred_ls[max_idx] + mean_values}]')
             print(f'x(opt): [{x[idx_fst]}, {x[idx_sec]}]')
 
-            ax[idx_row, 0].plot([x[min_idx], x[max_idx]],
+            parameters = pd.DataFrame(data={
+                'degree': [d],
+                'alpha': [alphas[i]]
+            })
+            sections = pd.DataFrame(data={
+                'start': [x[min_idx], x[idx_fst]],
+                'end': [x[max_idx], x[idx_sec]]
+            }, index=['curve', 'regression'])
+
+            writer = pd.ExcelWriter(os.path.join(opath, 'figures', f'section-d{d}_a{alphas[i]}.xlsx'))
+            parameters.to_excel(writer, index=False)
+            sections.to_excel(writer, startrow=4)
+            writer.save()
+
+            ax[0].plot([x[min_idx], x[max_idx]],
                                 [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
                                 marker='o',
-                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-            ax[idx_row, 1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
+                                markerfacecolor='none',
+                                label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            ax_all[0].plot([x[min_idx], x[max_idx]],
+                                [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
                                 marker='o',
-                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-            ax[idx_row, 2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+                                markerfacecolor='none',
+                                label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')
 
-            ax[idx_row, 0].plot([x[idx_fst], x[idx_sec]],
+            ax[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
+                                marker='o',
+                                markerfacecolor='none',
+                                label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            ax_all[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
+                                marker='o',
+                                markerfacecolor='none',
+                                label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+
+            ax[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
+                                marker='o',
+                                markerfacecolor='none', label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            ax_all[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
+                                marker='o',
+                                markerfacecolor='none', label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+
+            ax[0].plot([x[idx_fst], x[idx_sec]],
                                 [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
-                                marker='x')
-            ax[idx_row, 1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x')
-            ax[idx_row, 2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x')
+                                marker='x', label='linear(reg)', c='#00ff00')
+            ax_all[0].plot([x[idx_fst], x[idx_sec]],
+                                [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
+                                marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
 
+            ax[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
+            ax_all[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
 
-    # ax[idx_row, 0].legend()
-    ax[idx_row, 1].legend()
-    # ax[idx_row, 2].legend()
-    ax[idx_row, 1].set_ylim([0., 0.0005])
-    # fig.show()
+            ax[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
+            ax_all[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
+
+            # ax[idx_row, 0].legend()
+            ax[0].legend()
+            ax[1].legend()
+            ax[2].legend()
+            # ax[idx_row, 2].legend()
+            ax[1].set_ylim([0., 0.0005])
+            ax[2].set_ylim([-1e-8, 1e-8])
+            ax[0].set_box_aspect(1)
+            ax[1].set_box_aspect(1)
+            ax[2].set_box_aspect(1)
+            fig.suptitle(f'{name_model} with degree:${d}$, alpha:${alphas[i]}$')
+            fig.savefig(os.path.join(opath, 'figures', f'avg_smoothing-d{d}-a{alphas[i]}.png'))
+            plt.close(fig)
+            # fig.show()
+
+    ax_all[0].legend()
+    ax_all[1].legend()
+    # ax_all[2].legend()
+    ax_all[1].set_ylim([0., 0.0005])
+    ax_all[2].set_ylim([-1e-8, 1e-8])
+    ax_all[0].set_box_aspect(1)
+    ax_all[1].set_box_aspect(1)
+    ax_all[2].set_box_aspect(1)
+    # fig_all.suptitle(f'{name_model}')
+    fig_all.savefig(os.path.join(opath, 'figures', 'all_put_together.png'))
+    # fig_all.close()
+    plt.close(fig_all)
 
     max_scores = np.array(max_scores)
     max_idx = int(np.argmax(max_scores[:, 1]))
@@ -724,40 +815,42 @@ def fit_poly_curve2(hours, values, ax, idx_row):
 
     exit(1)
 
-def gaussign_process(hours, values):
-    gpr = GaussianProcessRegressor()
-
-    hours_ = scale_x(hours, 0., 1.).reshape((-1, 1))
-    gpr.fit(hours_, values)
-
-    x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
-    x_ = scale_x(x, 0., 1., hours.min(), hours.max()).reshape((-1, 1))
-    pred = gpr.predict(x_)
-
-    fig = plt.figure()
-    plt.plot(hours, values, c='k', label='observation')
-    plt.plot(x, pred, c='b', label='gaussian process')
-    plt.legend()
-    fig.show()
-
-
-
-def main(path, opath, is_ms):
+def main(path, opath, is_ms, r_cliff):
     data = load_data(path, is_ms)
-    return process_data(data, path, opath, is_ms)
+    return process_data(data, path, opath, is_ms, r_cliff)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This script calculates the gradients with data deduplication.')
-    parser.add_argument('--fpath', type=str, required=False, help='directory including data files. if path includes white spaces or Korean, wrap the entire path with double quotes.')
+    parser.add_argument('--fpath', type=str, required=False, help='directory including data files. '
+                                                                  'if path includes white spaces or Korean, wrap the entire path with double quotes.')
     parser.add_argument('--opath', type=str, required=False, help='path to save the output. if you don\'t specify it, the current directory is inplaced.', default=os.getcwd())
+    parser.add_argument('--r_cliff', type=float, required=False, help='ratio for cliff detection. '
+                                                                      'If the cliff exceeds the given value, the cliff will be corrected. '
+                                                                      'If you don\'t want to correct it, please drop the option or give the value 1.0 (default)', default=1.0)
+    parser.add_argument('--th_curv', type=float, required=False, help='threshold for detecting the linear section based on curvature.'
+                                                                      'You should adjust the value according to the scale of the creep strain.'
+                                                                      'the default value is 1e-8', default=1e-8)
+    parser.add_argument('--s_degree', type=int, required=False, help='starting degree of the regression model. '
+                                                                       'It is mandatory when you want to average datasets.'
+                                                                       'recommended value: 50(for 3 section data), 6(for 2 section data)', default=6)
+    parser.add_argument('--i_degree', type=int, required=False, help='interval for degrees of the regression model. '
+                                                                     'It is mandatory when you want to average datasets.'
+                                                                     'recommended value: 10(for 3 section data), 1(for 2 section data)', default=1)
+    parser.add_argument('--n_degree', type=int, required=False, help='the number of degrees to do regression.'
+                                                                     'It is mandatory when you want to average datasets.'
+                                                                     'ex: [s_degree, s_degree+i_degree, s_degree+i_degree*2, ...].'
+                                                                     'recommended value: 4', default=4)
+    parser.add_argument('--alpha', type=float, required=False, help='hyperparameter to reduce model complexity.'
+                                                                    'recommended value: 1e-5', default=1e-5)
     parser.add_argument('-MS', help='include this command in your arguments', action='store_true')
     parser.add_argument('-V', help='visual mode for the results in opath. Data analyzing does not performed.', action='store_true')
     parser.add_argument('-A', help='calculate the average for all files in the given directory', action='store_true')
-    parser.add_argument('-NI', help='indicating the number of sections is 3', action='store_true')
+    parser.add_argument('-I3', help='indicating the number of sections is 3', action='store_true')
 
     args = parser.parse_args()
 
-    fpath, opath, is_ms, is_visual, do_average, is_3 = args.fpath, args.opath, args.MS, args.V, args.A, args.NI
+    fpath, opath, r_cliff, th_curv, s_degree, i_degree, n_degree, alpha, is_ms, is_visual, do_average, is_3 = args.fpath, args.opath, args.r_cliff, args.th_curv, args.s_degree, args.i_degree, args.n_degree, args.alpha, args.MS, args.V, args.A, args.I3
+
     if not is_visual:
         if fpath is None or fpath == '':
             print('[!] you must specify the fpath in analyzing mode.')
@@ -766,6 +859,9 @@ if __name__ == '__main__':
     print('[*] path to file:', fpath)
     print('[*] path to save:', opath)
     print('[*] with ms:', is_ms)
+    print('[*] ratio for the cliff detection:', r_cliff)
+    print('[*] curvature threshold for detecting the linear section:', th_curv)
+    print('[*] do averaging:', do_average)
     print('[*] in visual mode:', is_visual)
     print('[*] the title of plot may not be properly expressed if you use the file name in Korean.')
 
@@ -779,38 +875,16 @@ if __name__ == '__main__':
         for spath in source_files:
             print('[*] start to analyze', spath)
             # if '34S5L25N3' in spath:
-            output = main(spath, opath, is_ms)
+            output = main(spath, opath, is_ms, r_cliff)
             outputs.append(output)
             # break
 
         if do_average:
             print('[*] calculate the average for all files. It takes a while...')
-            fig, ax = plt.subplots(3, 3, sharex=True)
-            hours, avg_creeps, gradients = calculate_average(outputs, is_3)
-            # if is_3:
-            fit_poly_curve(hours, avg_creeps, ax, 0, is_3)
+            # fig, ax = plt.subplots(1, 3, sharex=True)
+            hours, avg_creeps, gradients = calculate_average(opath, outputs, is_3)
+            fit_poly_curve(opath, hours, avg_creeps, is_3, th_curv, s_degree, i_degree, n_degree, alpha)
             # fig.show()
-            # else:
-            # fit_poly_curve2(hours, avg_creeps, ax, 0)
-
-            output = [outputs.pop(0)]
-
-            hours, avg_creeps, gradients = calculate_average(output, is_3)
-            # if is_3:
-            fit_poly_curve(hours, avg_creeps, ax, 1, is_3)
-            # else:
-            # fit_poly_curve2(hours, avg_creeps, ax, 0)
-
-            output = [outputs.pop(1)]
-            hours, avg_creeps, gradients = calculate_average(output, is_3)
-            # if is_3:
-            fit_poly_curve(hours, avg_creeps, ax, 2, is_3)
-            # else:
-            # fit_poly_curve2(hours, avg_creeps, ax, 0)
-            fig.show()
-
-            # x1, y1, x2, y2, idx_s3, m_primary, m_secondary, param_tertiary = fit_knee_points(hours, avg_creeps, opath)
-            # calc_avg_gradient(x1, y1, x2, y2, idx_s3, m_primary, m_secondary, param_tertiary)
     else:
         data_files = [os.path.join(opath, path) for path in os.listdir(opath) if not os.path.isdir(os.path.join(opath, path)) and 'xlsx' in path.lower()]
         if not data_files:
