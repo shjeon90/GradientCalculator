@@ -8,7 +8,7 @@ import warnings
 from pandas.api.types import is_string_dtype
 from scipy.optimize import curve_fit
 from sklearn.linear_model import LinearRegression, Lasso, Ridge
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.svm import SVR
@@ -562,22 +562,27 @@ def find_linear_intv(x, y, is_3):
         idx_sec = len(x) - np.argmax(scores)
         return idx_fst, idx_sec
     else:
-        f = x[-1] * 9 / 10.
-        limit = x[x < f].shape[0]
-        scores = []
+        # f = x[-1] * 9 / 10.
+        # limit = x[x < f].shape[0]
+        # scores = []
+        #
+        # for i in range(limit):
+        #     x_ = x[i:].reshape((-1, 1))
+        #     lr = LinearRegression()
+        #     lr.fit(x_, y[i:])
+        #
+        #     score = lr.score(x_, y[i:])
+        #     scores.append(score)
+        #
+        # # fig = plt.figure()
+        # # plt.plot(scores)
+        # # fig.show()
+        #
+        # idx_fst = np.argmax(scores)
+        # return idx_fst, -1
+        return -2, -1
 
-        for i in range(limit):
-            x_ = x[i:].reshape((-1, 1))
-            lr = LinearRegression()
-            lr.fit(x_, y[i:])
-
-            score = lr.score(x_, y[i:])
-            scores.append(score)
-
-        idx_fst = np.argmax(scores)
-        return idx_fst, -1
-
-def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA):
+def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA, t_estimate):
     mean_values = np.mean(values)
     if is_3:
         values -= mean_values
@@ -599,6 +604,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
         hours_r = np.log(hours_r + 1e-10).reshape((-1, 1))
 
     x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
+    if t_estimate is None: t_estimate = x[-1]
 
     # fig, ax = plt.subplots(1, 3)
     # ax[0].plot(hours, (values + mean_values) if is_3 else values, c='k', label='observations')
@@ -610,6 +616,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
                       label='observations')
 
     max_scores = []
+    mses = []
     for d in degrees:
         pf = PolynomialFeatures(degree=d, include_bias=True)
         hours_ = pf.fit_transform(hours_r)
@@ -617,11 +624,21 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
         models = []
         scores = []
         for a in alphas:
+            # if is_3:
+            #     md = Lasso(alpha=a)
+            # else:
+            #     md = Lasso(alpha=a)
+            md = Lasso(alpha=a)
             if is_3:
-                md = Lasso(alpha=a)
+                md.fit(hours_, values)
             else:
-                md = Ridge(alpha=a)
-            md.fit(hours_, values)
+                f = hours[-1] *  2. / 3.
+                sz_head = len(hours[hours < f])
+                weights = [1.] * sz_head + [100.] * (len(hours) - sz_head)
+                md.fit(hours_, values, weights)
+            # md.fit(hours_, values)
+            mse = mean_squared_error(values, md.predict(hours_))
+            mses.append(mse)
             score = md.score(hours_, values)
             models.append(md)
             scores.append(score)
@@ -648,11 +665,29 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             dp_2 = grad_ls[1:] - grad_ls[:-1]
             cur_ls = dp_2 / dh[:-1]
 
+            idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls, is_3)
+            if not is_3:
+                a = (pred_ls[idx_sec] - pred_ls[idx_fst]) / (x[idx_sec] - x[idx_fst])
+                b = pred_ls[idx_fst] - a * x[idx_fst]
+
+            if t_estimate != x[-1]:
+                x_est = np.array(x.tolist()+[t_estimate])
+                pred_est = np.array(pred_ls.tolist() + [a * t_estimate + b])
+                # print(x_est.shape, pred_est.shape, grad_ls.shape, cur_ls.shape)
+
+                grad_est = np.pad(grad_ls, (0, len(pred_est) - len(grad_ls)), constant_values=grad_ls[-1])
+                cur_est = np.pad(cur_ls, (0, len(pred_est) - len(cur_ls)), constant_values=0.)
+            else:
+                x_est = x[:-2]
+                pred_est = pred_ls[:-2]
+                grad_est = grad_ls[:-1]
+                cur_est = cur_ls
+
             outputs = pd.DataFrame(data={
-                'hours': x[:-2],
-                'smoothed_Cn': pred_ls[:-2],
-                'gradient': grad_ls[:-1],
-                'curvature': cur_ls
+                'hours': x_est,
+                'smoothed_Cn': pred_est,
+                'gradient': grad_est,
+                'curvature': cur_est
             })
             outputs.to_excel(os.path.join(opath, f'smoothed-d{d}a{alphas[i]}-output.xlsx'), index=False)
 
@@ -662,21 +697,20 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             else:
                 min_idx, max_idx = np.min(cur_thr), -1
 
-            idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls, is_3)
-
             # if not is_3:
             #     f = x[-1] * 9 / 10
             #     limit = x[x < f].shape[0]
             #     ax[0].scatter([x[limit]], [pred_ls[limit]], c='b')
 
-            name_model = 'lasso' if is_3 else 'ridge'
+            # name_model = 'lasso' if is_3 else 'ridge'
+            name_model = 'lasso'
 
             fig, ax = plt.subplots(1, 3)
             plt.get_current_fig_manager().window.state('zoomed')
             ax[0].scatter(hours, (values + mean_values) if is_3 else values, edgecolors='k', facecolors='none', label='observations')
 
-            ax[0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'{name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
-            ax_all[0].plot(x, (pred_ls + mean_values) if is_3 else pred_ls, label=f'{name_model}(d=${d}$, a=${alphas[i]}$)')
+            ax[0].plot(x if is_3 else (x.tolist()+[t_estimate]), (pred_ls + mean_values) if is_3 else (pred_ls.tolist()+[a * t_estimate + b]), label=f'{name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
+            ax_all[0].plot(x if is_3 else (x.tolist()+[t_estimate]), (pred_ls + mean_values) if is_3 else (pred_ls.tolist()+[a * t_estimate + b]), label=f'{name_model}(d=${d}$, a=${alphas[i]}$)')
 
             ax[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
             ax_all[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)')
@@ -703,51 +737,52 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             sections.to_excel(writer, startrow=4)
             writer.save()
 
-            ax[0].plot([x[min_idx], x[max_idx]],
-                                [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none',
-                                label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-            ax_all[0].plot([x[min_idx], x[max_idx]],
-                                [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none',
-                                label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')
-
-            ax[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none',
-                                label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-            ax_all[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none',
-                                label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-
-            ax[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none', label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-            ax_all[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
-                                marker='o',
-                                markerfacecolor='none', label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
-
-            ax[0].plot([x[idx_fst], x[idx_sec]],
-                                [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
-                                marker='x', label='linear(reg)', c='#00ff00')
-            ax_all[0].plot([x[idx_fst], x[idx_sec]],
-                                [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
-                                marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
-
-            ax[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
-            ax_all[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
-
-            ax[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
-            ax_all[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
+            # ax[0].plot([x[min_idx], x[max_idx]],
+            #                     [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none',
+            #                     label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            # ax_all[0].plot([x[min_idx], x[max_idx]],
+            #                     [(pred_ls[min_idx] + mean_values) if is_3 else pred_ls[min_idx], (pred_ls[max_idx] + mean_values) if is_3 else pred_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none',
+            #                     label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')
+            #
+            # ax[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none',
+            #                     label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            # ax_all[1].plot([x[min_idx], x[max_idx]], [grad_ls[min_idx], grad_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none',
+            #                     label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            #
+            # ax[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none', label='linear(curv)', c='r')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            # ax_all[2].plot([x[min_idx], x[max_idx]], [cur_ls[min_idx], cur_ls[max_idx]],
+            #                     marker='o',
+            #                     markerfacecolor='none', label=f'linear(curv) {name_model}(d=${d}$,a=${alphas[i]}$)')  # , label=f'linear intv with curv(d=${d}$, a=${alphas[i]}$)')
+            #
+            # ax[0].plot([x[idx_fst], x[idx_sec]],
+            #                     [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
+            #                     marker='x', label='linear(reg)', c='#00ff00')
+            # ax_all[0].plot([x[idx_fst], x[idx_sec]],
+            #                     [(pred_ls[idx_fst] + mean_values) if is_3 else pred_ls[idx_fst], (pred_ls[idx_sec] + mean_values) if is_3 else pred_ls[idx_sec]],
+            #                     marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
+            #
+            # ax[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
+            # ax_all[1].plot([x[idx_fst], x[idx_sec]], [grad_ls[idx_fst], grad_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
+            #
+            # ax[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label='linear(reg)', c='#00ff00')
+            # ax_all[2].plot([x[idx_fst], x[idx_sec]], [cur_ls[idx_fst], cur_ls[idx_sec]], marker='x', label=f'linear(reg) {name_model}(d=${d}$,a=${alphas[i]}$)')
 
             # ax[idx_row, 0].legend()
             ax[0].legend()
             ax[1].legend()
             ax[2].legend()
             # ax[idx_row, 2].legend()
+            ax[0].set_ylim(bottom=0.)
             ax[1].set_ylim([0., 0.0005])
             ax[2].set_ylim([-1e-8, 1e-8])
             ax[0].set_box_aspect(1)
@@ -755,12 +790,13 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             ax[2].set_box_aspect(1)
             fig.suptitle(f'{name_model} with degree:${d}$, alpha:${alphas[i]}$')
             fig.savefig(os.path.join(opath, 'figures', f'avg_smoothing-d{d}-a{alphas[i]}.png'))
-            plt.close(fig)
+            # plt.close(fig)
             # fig.show()
 
     ax_all[0].legend()
     ax_all[1].legend()
     # ax_all[2].legend()
+    ax_all[0].set_ylim(bottom=0.)
     ax_all[1].set_ylim([0., 0.0005])
     ax_all[2].set_ylim([-1e-8, 1e-8])
     ax_all[0].set_box_aspect(1)
@@ -769,7 +805,12 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
     # fig_all.suptitle(f'{name_model}')
     fig_all.savefig(os.path.join(opath, 'figures', 'all_put_together.png'))
     # fig_all.close()
-    plt.close(fig_all)
+    # plt.close(fig_all)
+    # fig_all.show()
+
+    # fig = plt.figure()
+    # plt.plot(mses)
+    # fig.show()
 
     max_scores = np.array(max_scores)
     max_idx = int(np.argmax(max_scores[:, 1]))
@@ -823,6 +864,29 @@ def fit_poly_curve2(hours, values, ax, idx_row):
 
     exit(1)
 
+def gp_regression(hours, values):
+    hours_ = scale_x(hours, 0, 1., 0., 50000.).reshape((-1, 1))
+    # hours_ = hours.reshape((-1, 1))
+    gp = GaussianProcessRegressor()
+    gp.fit(hours_, values)
+
+    # x = np.linspace(hours.min(), hours.max(), int((hours.max() - hours.min()) / 0.1))
+    x = np.linspace(0., 50000, int((50000 - 0.) / 1.))
+    # x_ = scale_x(x, 0., 1., hours.min(), hours.max()).reshape((-1, 1))
+    x_ = scale_x(x, 0., 1., 0., 50000.).reshape((-1, 1))
+    # x_ = x.reshape((-1, 1))
+
+    pred, std = gp.predict(x_, return_std=True)
+
+    fig = plt.figure()
+    plt.plot(hours, values, c='k')
+    plt.plot(x, pred, c='b')
+    plt.fill_between(x, pred-std, pred+std, alpha=0.1, color='black')
+    fig.show()
+    plt.show()
+
+    exit(1)
+
 def main(path, opath, is_ms, r_cliff):
     data = load_data(path, is_ms)
     return process_data(data, path, opath, is_ms, r_cliff)
@@ -850,6 +914,9 @@ if __name__ == '__main__':
                                                                      'recommended value: 4', default=4)
     parser.add_argument('--alpha', type=float, required=False, help='hyperparameter to reduce model complexity.'
                                                                     'recommended value: 1e-5', default=1e-5)
+    parser.add_argument('--t_estimate', type=float, required=False, help='time (hour) to estimate. '
+                                                                         'if it is not defined, it is set with the last observation time.'
+                                                                         'ex: 50000')
     parser.add_argument('-MS', help='include this command in your arguments', action='store_true')
     parser.add_argument('-V', help='visual mode for the results in opath. Data analyzing does not performed.', action='store_true')
     parser.add_argument('-A', help='calculate the average for all files in the given directory', action='store_true')
@@ -857,7 +924,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    fpath, opath, r_cliff, th_curv, s_degree, i_degree, n_degree, alpha, is_ms, is_visual, do_average, is_3 = args.fpath, args.opath, args.r_cliff, args.th_curv, args.s_degree, args.i_degree, args.n_degree, args.alpha, args.MS, args.V, args.A, args.I3
+    fpath, opath, r_cliff, th_curv, s_degree, i_degree, n_degree, alpha, is_ms, is_visual, do_average, is_3, t_estimate = args.fpath, args.opath, args.r_cliff, args.th_curv, args.s_degree, args.i_degree, args.n_degree, args.alpha, args.MS, args.V, args.A, args.I3, args.t_estimate
 
     if not is_visual:
         if fpath is None or fpath == '':
@@ -870,6 +937,7 @@ if __name__ == '__main__':
     print('[*] ratio for the cliff detection:', r_cliff)
     print('[*] curvature threshold for detecting the linear section:', th_curv)
     print('[*] do averaging:', do_average)
+    print('[*] time to estimate:', t_estimate)
     print('[*] in visual mode:', is_visual)
     print('[*] the title of plot may not be properly expressed if you use the file name in Korean.')
 
@@ -891,7 +959,8 @@ if __name__ == '__main__':
             print('[*] calculate the average for all files. It takes a while...')
             # fig, ax = plt.subplots(1, 3, sharex=True)
             hours, avg_creeps, gradients = calculate_average(opath, outputs, is_3)
-            fit_poly_curve(opath, hours, avg_creeps, is_3, th_curv, s_degree, i_degree, n_degree, alpha)
+            # gp_regression(hours, avg_creeps)
+            fit_poly_curve(opath, hours, avg_creeps, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate)
             # fig.show()
     else:
         data_files = [os.path.join(opath, path) for path in os.listdir(opath) if not os.path.isdir(os.path.join(opath, path)) and 'xlsx' in path.lower()]
