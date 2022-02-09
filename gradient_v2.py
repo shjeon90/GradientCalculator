@@ -170,7 +170,7 @@ def sanitize_cliff_data(hours, values, RATIO_CLIFF_THRESHOLD):
         return values
     else: return values
 
-def process_data(data, path, opath, is_ms, RATIO_CLIFF_THRESHOLD):
+def process_data(data, path, opath, is_ms, RATIO_CLIFF_THRESHOLD, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate, t_start):
     print('[*] processing data...')
     time_info = data.iloc[:, :-1]
     time_info = time_info.astype('int64')
@@ -208,6 +208,8 @@ def process_data(data, path, opath, is_ms, RATIO_CLIFF_THRESHOLD):
     outputs = pd.DataFrame(data={'date': dates, 'hour': hours, 'Cn': creep_strain, 'gradient': gradients})
     outputs.to_excel(os.path.join(opath, '%s-output.xlsx' % fname), index=False)
     # plt.show()
+
+    fit_poly_curve(opath, hours, creep_strain, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate, t_start, fname)
 
     return outputs
 
@@ -623,7 +625,7 @@ def calc_statistics(hours, values, t_esaimte, t_start, pred_base):
     #
     # return np.squeeze(x_space), m_preds, std_preds, diff
 
-def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA, t_estimate, t_start):
+def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA, t_estimate, t_start, fname=None):
     mean_values = np.mean(values)
     if is_3:
         values -= mean_values
@@ -722,6 +724,14 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
 
                 # x_space, m_pred, std_pred, diff = calc_statistics(x, pred_ls, t_estimate, t_start, pred_est[-1])
                 x_diffs, p_diffs = calc_statistics(x, pred_ls, t_estimate, t_start, pred_est[-1])
+
+                output_diff = pd.DataFrame(data={
+                    'time_diff': x_diffs,
+                    'pred_diff': p_diffs
+                })
+                if fname is None: title = f'avg_prediction_diff-d{d}a{alphas[i]}.xlsx'
+                else: title = f'{fname}_prediction_diff-d{d}a{alphas[i]}.xlsx'
+                output_diff.to_excel(os.path.join(opath, title), index=False)
             else:
                 x_est = x[:-2]
                 pred_est = pred_ls[:-2]
@@ -734,7 +744,9 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
                 'gradient': grad_est,
                 'curvature': cur_est
             })
-            outputs.to_excel(os.path.join(opath, f'smoothed-d{d}a{alphas[i]}-output.xlsx'), index=False)
+            if fname is None: title = f'avg_smoothed-d{d}a{alphas[i]}-output.xlsx'
+            else: title = f'{fname}_smoothed-d{d}a{alphas[i]}-output.xlsx'
+            outputs.to_excel(os.path.join(opath, title), index=False)
 
             cur_thr = np.where(np.abs(cur_ls) < CURVATURE_THRESHOLD)
             if is_3:
@@ -796,7 +808,9 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
                 'end': [x[max_idx], x[idx_sec]]
             }, index=['curve', 'regression'])
 
-            writer = pd.ExcelWriter(os.path.join(opath, 'figures', f'section-d{d}_a{alphas[i]}.xlsx'))
+            if fname is None: title = f'section-d{d}_a{alphas[i]}.xlsx'
+            else: title = f'{fname}_section-d{d}_a{alphas[i]}.xlsx'
+            writer = pd.ExcelWriter(os.path.join(opath, 'figures', title))
             parameters.to_excel(writer, index=False)
             sections.to_excel(writer, startrow=4)
             writer.save()
@@ -854,7 +868,9 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             ax[2].set_box_aspect(1)
             ax[3].set_box_aspect(1)
             fig.suptitle(f'{name_model} with degree:${d}$, alpha:${alphas[i]}$')
-            fig.savefig(os.path.join(opath, 'figures', f'avg_smoothing-d{d}-a{alphas[i]}.png'))
+            if fname is None: title = f'avg_smoothing-d{d}-a{alphas[i]}.png'
+            else: title = f'{fname}_smoothing-d{d}-a{alphas[i]}.png'
+            fig.savefig(os.path.join(opath, 'figures', title))
             # plt.close(fig)
             fig.show()
 
@@ -870,7 +886,9 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
     ax_all[2].set_box_aspect(1)
     ax_all[3].set_box_aspect(1)
     # fig_all.suptitle(f'{name_model}')
-    fig_all.savefig(os.path.join(opath, 'figures', 'all_put_together.png'))
+    if fname is None: title = 'all_put_together.png'
+    else: title = f'{fname}_all_put_together.png'
+    fig_all.savefig(os.path.join(opath, 'figures', title))
     # fig_all.close()
     # plt.close(fig_all)
     fig_all.show()
@@ -954,9 +972,9 @@ def gp_regression(hours, values):
 
     exit(1)
 
-def main(path, opath, is_ms, r_cliff):
+def main(path, opath, is_ms, r_cliff, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate, t_start):
     data = load_data(path, is_ms)
-    return process_data(data, path, opath, is_ms, r_cliff)
+    return process_data(data, path, opath, is_ms, r_cliff, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate, t_start)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This script calculates the gradients with data deduplication.')
@@ -1020,7 +1038,7 @@ if __name__ == '__main__':
         for spath in source_files:
             print('[*] start to analyze', spath)
             # if '34S5L25N3' in spath:
-            output = main(spath, opath, is_ms, r_cliff)
+            output = main(spath, opath, is_ms, r_cliff, is_3, th_curv, s_degree, i_degree, n_degree, alpha, t_estimate, t_start)
             outputs.append(output)
             # break
 
