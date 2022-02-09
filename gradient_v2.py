@@ -582,7 +582,7 @@ def find_linear_intv(x, y, is_3):
         # return idx_fst, -1
         return -2, -1
 
-def calc_statistics(hours, values, t_esaimte, t_start):
+def calc_statistics(hours, values, t_esaimte, t_start, pred_base):
     print(hours.shape, values.shape)
 
     # t_start = 1590
@@ -594,6 +594,7 @@ def calc_statistics(hours, values, t_esaimte, t_start):
 
     idx_f = hours[hours < t_start].shape[0]
 
+    x_diffs, p_diffs = [], []
     for i in range(idx_f, len(hours) - 1):
         x = hours[i:]
         v = values[i:]
@@ -602,24 +603,25 @@ def calc_statistics(hours, values, t_esaimte, t_start):
         lr.fit(x.reshape((-1, 1)), v)
 
         pred = lr.predict(x_space)
+
+        p_diff = pred[-1] - pred_base
+        x_diff = x[-1] - x[0]
+        p_diffs.append(p_diff)
+        x_diffs.append(x_diff)
         # print(i, pred[-1])
-        preds.append(pred)
-        #
-        # fig = plt.figure()
-        # plt.plot(hours, values)
-        # plt.plot(x_space, pred)
-        # fig.show()
-        # plt.show()
+        # preds.append(pred)
 
-    preds = np.array(preds)
+    return x_diffs, p_diffs
 
-    m_preds = np.mean(preds, 0)
-    std_preds = np.std(preds, 0, ddof=1)
-
-    t_value = t.ppf(1 - 0.025, len(x_space) - 1)
-    diff = t_value * std_preds / np.sqrt(len(x_space))
-
-    return np.squeeze(x_space), m_preds, std_preds, diff
+    # preds = np.array(preds)
+    #
+    # m_preds = np.mean(preds, 0)
+    # std_preds = np.std(preds, 0, ddof=1)
+    #
+    # t_value = t.ppf(1 - 0.025, len(x_space) - 1)
+    # diff = t_value * std_preds / np.sqrt(len(x_space))
+    #
+    # return np.squeeze(x_space), m_preds, std_preds, diff
 
 def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_degree, n_degree, ALPHA, t_estimate, t_start):
     mean_values = np.mean(values)
@@ -649,7 +651,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
     # ax[0].plot(hours, (values + mean_values) if is_3 else values, c='k', label='observations')
 
 
-    fig_all, ax_all = plt.subplots(1, 3)
+    fig_all, ax_all = plt.subplots(1, 4)
     plt.get_current_fig_manager().window.state('zoomed')
     ax_all[0].scatter(hours, (values + mean_values) if is_3 else values, edgecolors='k', facecolors='none',
                       label='observations')
@@ -705,7 +707,6 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             cur_ls = dp_2 / dh[:-1]
 
             idx_fst, idx_sec = find_linear_intv(x_sec_intv, pred_ls, is_3)
-            x_space, m_pred, std_pred, diff = calc_statistics(x, pred_ls, t_estimate, t_start)
 
             if not is_3:
                 a = (pred_ls[idx_sec] - pred_ls[idx_fst]) / (x[idx_sec] - x[idx_fst])
@@ -715,10 +716,12 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
                 x_est = np.array(x.tolist()+[t_estimate])
                 pred_est = np.array(pred_ls.tolist() + [a * t_estimate + b])
                 # print(x_est.shape, pred_est.shape, grad_ls.shape, cur_ls.shape)
-                print(pred_est[-1])
 
                 grad_est = np.pad(grad_ls, (0, len(pred_est) - len(grad_ls)), constant_values=grad_ls[-1])
                 cur_est = np.pad(cur_ls, (0, len(pred_est) - len(cur_ls)), constant_values=0.)
+
+                # x_space, m_pred, std_pred, diff = calc_statistics(x, pred_ls, t_estimate, t_start, pred_est[-1])
+                x_diffs, p_diffs = calc_statistics(x, pred_ls, t_estimate, t_start, pred_est[-1])
             else:
                 x_est = x[:-2]
                 pred_est = pred_ls[:-2]
@@ -747,7 +750,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             # name_model = 'lasso' if is_3 else 'ridge'
             name_model = 'lasso'
 
-            fig, ax = plt.subplots(1, 3)
+            fig, ax = plt.subplots(1, 4)
             plt.get_current_fig_manager().window.state('zoomed')
             ax[0].scatter(hours, (values + mean_values) if is_3 else values, edgecolors='k', facecolors='none', label='observations')
 
@@ -759,13 +762,19 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             # ax_all[0].plot(x if is_3 else x,
             #                (pred_ls + mean_values) if is_3 else pred_ls,
             #                label=f'{name_model}(d=${d}$, a=${alphas[i]}$)')
+            # if not is_3:
+            #     ax[0].plot(x_space, m_pred, c='r', linestyle='-', label='avg pred')
+            #     ax_all[0].plot(x_space, m_pred, linestyle='-', label=f'avg pred({name_model}, d=${d}$, a=${alphas[i]}$)')
+            #     ax[0].fill_between(x_space, m_pred - std_pred, m_pred + std_pred, color='k', alpha=0.1)
+            #     # ax[0].fill_between(x_space, m_pred - diff, m_pred + diff, color='b', alpha=0.1)
+            #     ax_all[0].fill_between(x_space, m_pred - std_pred, m_pred + std_pred, color='k', alpha=0.1)
+            #     # ax_all[0].fill_between(x_space, m_pred - diff, m_pred + diff, color='b', alpha=0.1)
+
             if not is_3:
-                ax[0].plot(x_space, m_pred, c='r', linestyle='-', label='avg pred')
-                ax_all[0].plot(x_space, m_pred, linestyle='-', label=f'avg pred({name_model}, d=${d}$, a=${alphas[i]}$)')
-                ax[0].fill_between(x_space, m_pred - std_pred, m_pred + std_pred, color='k', alpha=0.1)
-                # ax[0].fill_between(x_space, m_pred - diff, m_pred + diff, color='b', alpha=0.1)
-                ax_all[0].fill_between(x_space, m_pred - std_pred, m_pred + std_pred, color='k', alpha=0.1)
-                # ax_all[0].fill_between(x_space, m_pred - diff, m_pred + diff, color='b', alpha=0.1)
+                ax[3].plot(x_diffs, p_diffs)
+                ax_all[3].plot(x_diffs, p_diffs, label=f'{name_model}(d=${d}$, a=${alphas[i]}$)')
+                ax[3].invert_xaxis()
+                ax_all[3].invert_xaxis()
 
             ax[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)', c='b')
             ax_all[1].plot(x[:-1], grad_ls, label=f'grad {name_model}(d=${d}$, a=${alphas[i]}$)')
@@ -843,6 +852,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
             ax[0].set_box_aspect(1)
             ax[1].set_box_aspect(1)
             ax[2].set_box_aspect(1)
+            ax[3].set_box_aspect(1)
             fig.suptitle(f'{name_model} with degree:${d}$, alpha:${alphas[i]}$')
             fig.savefig(os.path.join(opath, 'figures', f'avg_smoothing-d{d}-a{alphas[i]}.png'))
             # plt.close(fig)
@@ -850,6 +860,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
 
     ax_all[0].legend()
     ax_all[1].legend()
+    ax_all[3].legend()
     # ax_all[2].legend()
     ax_all[0].set_ylim(bottom=0.)
     ax_all[1].set_ylim([0., 0.0005])
@@ -857,6 +868,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
     ax_all[0].set_box_aspect(1)
     ax_all[1].set_box_aspect(1)
     ax_all[2].set_box_aspect(1)
+    ax_all[3].set_box_aspect(1)
     # fig_all.suptitle(f'{name_model}')
     fig_all.savefig(os.path.join(opath, 'figures', 'all_put_together.png'))
     # fig_all.close()
