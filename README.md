@@ -44,10 +44,10 @@ fpath 디렉토리 내에 엑셀(.xlsx) 파일이 포함된 경우, 첫 번째 �
 
 현재 미완성 상태이며, 테스트 수준에서는 반드시 `-A` 옵션을 추가할 것.
 ```shell
->> python gradient_v2.py --fpath [데이터 파일이 보관된 디렉토리 경로] --opath [분석 결과 저장 경로] --r_cliff [단차 탐지 수준(0~1)] --th_curv [곡률 임계치] --s_degree [피팅 모델의 시작 복잡도] --i_degree [복잡도의 간격] --n_degree [분석에사용한 복잡도 개수] --alpha [복잡도를 줄이기 위한 값] [-MS] [-A] [-I3]
+>> python gradient_v2.py --fpath [데이터 파일이 보관된 디렉토리 경로] --opath [분석 결과 저장 경로] --r_cliff [단차 탐지 수준(0~1)] --th_curv [곡률 임계치] --s_degree [피팅 모델의 시작 복잡도] --i_degree [복잡도의 간격] --n_degree [분석에사용한 복잡도 개수] --alpha [복잡도를 줄이기 위한 값] --t_estimate [추정하려는 시간(hours)] [-MS] [-A] [-I3]
 
 # 예시 (2구간 데이터)
->> python gradient_v2.py --fpath .\dir_data --opath .\output --r_cliff 1.0 --th_curv 1e-8 --s_degree 6 --i_degree 1 --n_degree 3 --alpha 1e-5 -A
+>> python gradient_v2.py --fpath .\dir_data --opath .\output --r_cliff 1.0 --th_curv 1e-8 --s_degree 6 --i_degree 1 --n_degree 3 --alpha 1e-5 -A --t_estimate 50000
 ```
 
 * `gradient_v2.py`의 옵션 상세 설명
@@ -61,6 +61,7 @@ fpath 디렉토리 내에 엑셀(.xlsx) 파일이 포함된 경우, 첫 번째 �
   * `--alpha`: smoothing에 사용되는 모델의 복잡도를 줄이기 위한 변수. 3구간/2구간 데이터 모두 `1e-5`를 권장.
   * `-A`: 해당 옵션을 추가하면 `--fpath` 경로에 저장된 데이터셋(csv)의 평균을 계산함.
   * `-I3`: 해당 옵션을 추가하면, 분석할 데이터가 3구간 데이터임을 알림.
+  * `--t_estimate`: creep 값을 추정하려는 시간. `--fpath`에서 주어진 파일에 기록된 마지막 시간보다 이 옵션의 값이 작을 경우, creep 값을 추정하지 않음.
 
 Output files
 ==

@@ -670,7 +670,7 @@ def fit_poly_curve(opath, hours, values, is_3, CURVATURE_THRESHOLD, s_degree, i_
                 a = (pred_ls[idx_sec] - pred_ls[idx_fst]) / (x[idx_sec] - x[idx_fst])
                 b = pred_ls[idx_fst] - a * x[idx_fst]
 
-            if t_estimate != x[-1]:
+            if t_estimate > x[-1]:
                 x_est = np.array(x.tolist()+[t_estimate])
                 pred_est = np.array(pred_ls.tolist() + [a * t_estimate + b])
                 # print(x_est.shape, pred_est.shape, grad_ls.shape, cur_ls.shape)
